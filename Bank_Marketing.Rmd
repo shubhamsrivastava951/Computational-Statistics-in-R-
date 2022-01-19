@@ -1,22 +1,4 @@
----
-title: "Group 27 - Bank Marketing Report"
-author: Abuthahir Alauvdeen (480543989), Ananda Aziz Hardjanto (470469051), Anthony Guo (470394395), Gaurav Singh (440354745), Rathna Ganesh Gopalarathnam (490616279), Shubham Prakash Srivastava (500299300), Sukrit Vashist (490366547)
-date: "07/11/2021"
-output:
-  html_document:
-    code_folding: hide
-  word_document: default
----
-<style>
-body {
-text-align: justify}
-</style>
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
-
-```{r, warning=FALSE, message=FALSE}
 #Import package
 library(tidyverse)
 library(GGally)
