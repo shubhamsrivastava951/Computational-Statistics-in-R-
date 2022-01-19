@@ -1,0 +1,528 @@
+---
+title: "Group 27 - Bank Marketing Report"
+author: Abuthahir Alauvdeen (480543989), Ananda Aziz Hardjanto (470469051), Anthony Guo (470394395), Gaurav Singh (440354745), Rathna Ganesh Gopalarathnam (490616279), Shubham Prakash Srivastava (500299300), Sukrit Vashist (490366547)
+date: "07/11/2021"
+output:
+  html_document:
+    code_folding: hide
+  word_document: default
+---
+<style>
+body {
+text-align: justify}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, warning=FALSE, message=FALSE}
+#Import package
+library(tidyverse)
+library(GGally)
+library(mltools)
+library(data.table)
+library(gridExtra)
+library(mltools)
+library(data.table)
+library(smotefamily)
+library(caret)
+library(caTools)
+library(e1071)
+library(ranger)
+library(precrec)
+library(xgboost)
+```
+
+```{r}
+#Read bank marketing data
+bank.data <- read.csv(file = "bank-additional-full.csv", header = TRUE, sep = ";", stringsAsFactors = TRUE)
+```
+
+#### Overview of the problem
+Cold calling is the process in which salespeople contact potential customers with no prior interest with the product. As such, these calls are estimated to convert to a sale very rarely; about 2% of the time according to marketer Charlie Cook [1]. The purpose of this task is to determine whether a customer will subscribe to a bank deposit from a Portuguese bank, given certain information about that customer. This problem falls under the branch of binary classification; given a feature vector of information from a particular customer, the goal is to output either yes or no. This problem is interesting as it would help improve the performance of ‘cold calling’. By solving the classification problem, we are able to reduce the customer pool and hence increase efficiency by only calling the customers who have a high probability of subscribing to a term deposit.
+
+#### Dataset Description 
+The data was acquired from Kaggle, posted by Henrique Yamahata and was sourced from the UCI machine learning repository [2]. It is given as a 5.83 MB CSV file with semicolon separated values, the dataset contains 41189 rows each consisting of 20 features and one response variable either yes or no. The features include a mix of both numerical and categorical variables with a mix of integers, floats, and strings. From the 20 features, it can be divided into 4 categories of bank client data, current campain data, previous campaign data and the social and economic information
+
+* <b>Bank Client Data </b> - Age: age of the client (numerical), Job: client’s job (categorical), Marital: Marital status (categorical), Education: Highest education level of client (categorical), Default: Has client enter a credit default (categorical), Housing: Does client have a house loan (categorical), Loan: Does client have any personal loan (categorical)
+
+* <b>Current Campaign Data:</b> - Contact: Mode of contact (categorical), Month: Month of last contact with client (categorical), DayofWeek: Day of the week of last contact (categorical, Duration: duration of last contact (numeric, in seconds)
+
+* <b>Previous Campaign Data:</b> Campaign: number of contacts made with client on current campaign (numeric), Pdays: days since last contact with client (numeric), Previous: number of contacts prior to current campaign (numeric), Poutcome: outcome of previous campaign (categorical)
+
+* <b>Social and Economic Data:</b> The current social and economic features on the day of campaign. Emp.var.rate: Current Employment variation rate (numeric), Cons.price.idx: Consumer price index (numeric), Cons.conf.idx: Consumer confidence index (numeric), Euribor3m: Euribor at 3-month rate (numeric), Nr.employed: Number of employees (numeric)
+
+#### Exploratory Data Analysis
+
+* <b>Class Imbalance</b> - One of the biggest challenges with this dataset is the imbalance number of samples for binary (yes/no) response variable. There are 36548 (88.7%) of samples belongs to class “no” and only 4640 (11.3%) belongs to class “yes”.
+
+* <b>Univariate Analysis</b> - We did univariate analysis on each of the 20 predictors and below are the import observations.
+
+    * Default – When clients were asked about credit in default, they either answered “no” (79.3%) or “unknown” (20.7%) which is obviously understandable. Only 3 people answered “yes” (~0.0%).
+
+    * Duration – This predictor isn’t helpful as the duration of the call can’t be known before. Our aim is to call clients only if the chances to term deposit subscription is most likely “yes”.
+
+    * Other important insights - Clients with higher education, married are more likely to subscribe term deposit. Clients who have subscribed earlier are most likely to subscribe again if reconnected. The clients responded through a cellular phone has subscribed 5 times more compared to telephone responders.
+
+* <b>Outlier Detection</b> - As we all know calling a client multiple times will not help in getting a term deposit. We tried a box plot (Figure 1) to analyse the data, it shows calling a client more than 8 times is an outlier and beyond 12 times will not help in getting a term deposit as shown in the below bar chart (Figure 2). However, there are some bad samples that shows clients are called more than 40 times with maximum 56 times.
+
+```{r, out.width="70%"}
+#outlier detection
+client.repeated.contact <- bank.data %>% 
+                              select(campaign) %>%
+                              pivot_longer(campaign, names_to = "Campaign", values_to = "repeated.contact")
+
+#box plot showing outliers
+ggplot(client.repeated.contact, aes(x = Campaign, y = repeated.contact)) + 
+  geom_boxplot(fill = "white", colour = "#3366FF", outlier.color = "red", outlier.shape = 1) + ylim(0,60) + 
+  stat_boxplot(geom = 'errorbar',width = 0.2, colour = "#3366FF") + 
+  ggtitle("Figure 1 - Outlier Detection") + ylab("Number of times - Client Contacted") + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+#Will calling customer more than 8 times help in term deposit subscription?
+bank.data.campaign <- bank.data %>%
+                        select(campaign, Term.deposit = y) %>% 
+                        filter(campaign >= 8)
+
+ggplot(bank.data.campaign, aes(x = campaign, fill = Term.deposit)) + geom_bar() + 
+  ggtitle(expression(atop("Figure 2 - Outlier - Term Deposit Subscription", atop(italic("Will calling customer more than 8 times help in term deposit subscription?"), "")))) + 
+  xlab("Campaign Calls") + ylab("Frequency") + theme(plot.title = element_text(hjust = 0.5))
+```
+
+* <b>Multivariate Analysis</b> - There are five numerical predictors representing social and economic indicators. As these are supposed to be highly correlated, we constructed correlation plot (Figure 3) to understand deeper. From the plot, we could conclude employment variation rate, euribor 3 month rate and number of employees are highly correlated and share redundant information. 
+
+```{r, out.width="60%"}
+#Correlation matrix - Numerical Predictors
+numerical.var <- bank.data %>%
+  select(age, campaign, pdays, previous, emp.var.rate, cons.price.idx, cons.conf.idx, euribor3m, nr.employed)
+
+ggcorr(numerical.var, label = TRUE) + ggtitle("Figure 3 - Correlation Matrix - Numerical Predictors")
+```
+
+* <b>Relationship of categorical predictors with response</b> - We did Pearson’s Chi-squared test on all categorical variables to check their association with response variable. We found housing loan and personal loan predictors aren't significant. 
+
+* <b>Relationship of Numerical predictors with response</b> - We did ANOVA test for all five socio-economic numerical variables. Based on the results it looks like all the five variables are significant in predicting the term deposit subscription.
+
+* <b>Missing Values</b> - Analysing the whole data, there are 12718 missing values which is 1.47% of total values. When we did a deeper look at each variable level, we found only 6 out of 20 predictors suffers at least one missing value and the response variable looks good as shown below in table 1.
+
+```{r}
+#Count missing values in predictors
+bank.data.df <- bank.data %>%
+                  summarise_all(list(~sum(. == "unknown"))) %>%
+                  gather(key = "dataset.columns", value = "missing.value.count") %>% 
+                  arrange(desc(missing.value.count)) %>%
+                  filter(missing.value.count > 0)
+
+knitr::kable(bank.data.df, longtable = TRUE, booktabs = TRUE, digits = 4, 
+             col.names =c("Variables", "Missing Count"), 
+             caption = 'Table 1 - Missing value count in variables')
+```
+
+#### EDA Outcome
+
+To conclude, the following four variables are removed from the dataset as they are not very helpful in predicting response variable.
+
+  <b>1. Default</b> – Lack of variability - When clients were asked if they have defaulted in the past, only 3 people answered yes (~0.0%) and as it is obviously understandable, most of them either answered no (79.3%) or unknown (20.7%). This predictor doesn’t have any variability to predict term deposit.
+
+  <b>2. Housing Loan</b> – Lack of significance - Based on the Pearson’s Chi-squared test, the p-value for this predictor is 0.06146927. So, at 95% confidence level, we can confirm that there is no association of housing loan variable to predict term deposit.
+
+  <b>3. Personal Loan</b> – Lack of significance - Based on the Pearson’s Chi-squared test, the p-value for this predictor is 0.5677161. So, at 99% confidence level, we can confirm that there is no association of personal loan variable to predict term deposit.
+
+  <b>4. Duration</b> – Lack of availability - Duration of the call will be known only after the call finishes. Our aim is to call clients only if the chances to term deposit subscription is most likely “yes”. Hence this variable will be unknown during the prediction and cannot be used.
+
+<b>Correlation Issue</b> – Based on the correlation plot constructed, we found that employment variation rate, euribor 3-month rate and number of employees are highly correlated and share redundant information. Hence, we wanted to include only the important variable in the model. To identify the important variable, we did ANOVA test to find their relationship in predicting response variable. Based on the ANOVA results, all the variables are significant in predicting response variable
+
+#### Pre-processing
+
+```{r}
+#Removing columns based on EDA
+bank.data.preprocess <- bank.data %>%
+  select(-default, -housing, -loan, -duration)
+
+#Remove missing records
+bank.data.preprocessed <- bank.data.preprocess %>%
+  filter(education != "unknown", job != "unknown", marital != "unknown")
+
+#Encoding variables
+
+#Categorical Variable - One hot encoding
+catagorical.var <- bank.data.preprocessed %>%
+  select(job, marital, contact, poutcome, education, month, day_of_week)
+
+catagorical.var.onehot <- one_hot(as.data.table(catagorical.var))
+
+#Numerical Variable - Normalization (Min-max Scaling)
+numerical.var <- bank.data.preprocessed %>%
+  select(age, campaign, pdays, previous, emp.var.rate, cons.price.idx, cons.conf.idx, euribor3m, nr.employed)
+
+norm.preprocess <- preProcess(numerical.var, method=c("range"))
+norm.preprocess.out <- predict(norm.preprocess, numerical.var)
+
+#Label Encoding
+target.class <- ifelse(bank.data.preprocessed$y == "no", 0, 1)
+
+bank.data.encoded <- data.frame(catagorical.var.onehot, norm.preprocess.out, target.class)
+
+#Upsampling using SMOTE
+bank.data.smote <- SMOTE(bank.data.encoded[,-which(colnames(bank.data.encoded) == "target.class")], 
+                         bank.data.encoded$target.class)
+```
+
+<b>Missing Values</b> – After removing the four variables (Default, Housing Loan, Personal Loan, Duration) based on EDA outcome, the missing value contribute only 4.84% of overall data. Hence, we planned to remove them.
+
+<b>Encoding variables</b> – Numerical variables are either standardised or normalised based on the model performance. Categorical variables are converted into numerical using one-hot encoding. Response variable is label encoded in to 1 for positive class and 0 for negative class.
+
+  * <b>Standardisation & Normalisation (Min-Max Scaling)</b> – We used caret package to do both Standardisation & Normalisation. We tried to fit both standardized and normalized data to each of the four models and evaluated their performance for best results. We picked either Standardised data or Normalised data depending on the model performance results for each model.
+
+  * <b>One-hot encoding</b> – We use mltools and data.table libraries to convert all the categorical variables (job, marital, contact, poutcome, education, month, day_of_week) to numerical variable.
+Class Imbalance - There are 88.7% of samples belongs to class “no” and only 11.3% belongs to class “yes”. To combat imbalance, we used SMOTE method (smotefamily library) to up-sample the class “yes”. As a result, class “yes” was up-sampled to 30520 and class “no” remained same at 34831.
+
+#### Approach
+
+We used caret package to split the data into two sets in 80:20 ratio. 80% of the data is used for training and the remaining 20% is used for testing. 80% train data is further split into n-fold to do repeated cross-validation to find the best parameters. We then fit the model using train data on the best parameters. The performance of the model is then evaluated using the test data (remaining 20%). We used confusion matrix to get accuracy, sensitivity, specificity scores to compare all the four models and chose the best performing model for this bank marketing dataset. We plot ROC curve for all four models. This is simply a plot that represents the trade-off between sensitivity and specificity.
+
+#### Classification Algorithms
+
+<b>Logistic Regression</b> - Logistic regression is a model that is often used upon classifying sets of independent variables into two class groups. In the simplest form, logistic regression would use a logistic function or a logistic curve to create a classification model for a binary type class. To improve the performance of the model, the dataset is pre-processed as previously explain in the report in various ways. The three pre-processing methods being tuned is standardization, normalization, or raw data without either standardization or normalization. 
+
+To train the model, there are a few parameters to be set in order to establish the logistic regression model and that it is for a binary classification problem. The method being used in the training model is called the generalized linear model (GLM). Upon using the GLM method, it needs to be specified the ‘family’ that is being used. A “Binomial” family is set with a link of “logit”, as it would indicate that the model is trying to achieve a binary classification.
+
+From the three type of pre-processed data that is used, the normalised data set generates the highest accuracy, as it can be seen in the table of results. However, the difference between the three type of pre-processed data is very small (under 0.05%) that is negligible. As for the value of the specificity and sensitivity, it is approximately constant across the three logistic regression model with a sensitivity of 0.6 and a specificity of 0.8. This shows how the model is able to test correctly upon the negative of the dataset slightly when in comparison to testing correctly on the positives.
+
+```{r}
+#Reusing the train and test split done for XGBoost
+bank.data.xgboost <- bank.data.smote$data
+
+set.seed(1000)
+
+#Splitting the data into two sets. 80% of the data used for training and 20% for testing the model.
+partition.dataset <- createDataPartition(bank.data.xgboost$class, p = 0.80)[[1]]
+
+train.dataset <- bank.data.xgboost[partition.dataset,]
+test.dataset <- bank.data.xgboost[-partition.dataset,]
+```
+
+
+```{r}
+options(warn=-1)
+#Fitting the logistic regression model
+bank.logit.norm <- train(class ~ ., data = train.dataset, method = "glm",
+                         family = binomial(link = 'logit'),
+                         trControl = trainControl(method = "repeatedcv", number = 10, repeats = 10))
+
+#Predicting the performance measure
+bank.logit.pred.norm <- predict(bank.logit.norm, newdata = test.dataset)
+test.confmat.norm <- confusionMatrix(bank.logit.pred.norm, (as.factor(test.dataset$class)), positive = '1')
+
+expected.train.norm <- factor(train.dataset$class)
+
+train.predict.norm <- predict(bank.logit.norm, train.dataset[,-which(colnames(bank.data.xgboost) == "class")])
+
+train.confmat.norm <- confusionMatrix(data = train.predict.norm, reference = expected.train.norm, positive = '1')
+
+#Performance mesure scores
+log.reg.norm.measure <- c("Accuracy", "Sensitivity", "Specificity", "Precision", "Recall", "F1 Score")
+
+logreg.norm.test.accuracy <- test.confmat.norm$overall[1]
+logreg.norm.test.sensitivity <- test.confmat.norm$byClass[1]
+logreg.norm.test.specificity <- test.confmat.norm$byClass[2]
+logreg.norm.test.precision <- test.confmat.norm$byClass[5]
+logreg.norm.test.recall <- test.confmat.norm$byClass[6]
+logreg.norm.test.f1 <- test.confmat.norm$byClass[7]
+logreg.norm.test.measure <- c(logreg.norm.test.accuracy, logreg.norm.test.sensitivity, logreg.norm.test.specificity, logreg.norm.test.precision, logreg.norm.test.recall, logreg.norm.test.f1)
+
+logreg.norm.train.accuracy <- train.confmat.norm$overall[1]
+logreg.norm.train.sensitivity <- train.confmat.norm$byclass[1]
+logreg.norm.train.specificity <- train.confmat.norm$byclass[2]
+logreg.norm.train.precision <- train.confmat.norm$byclass[5]
+logreg.norm.train.recall <- train.confmat.norm$byclass[6]
+logreg.norm.train.f1 <- train.confmat.norm$byclass[7]
+logreg.norm.train.measure <- c(logreg.norm.train.accuracy, logreg.norm.train.sensitivity, logreg.norm.train.specificity, logreg.norm.train.precision, logreg.norm.train.recall, logreg.norm.train.f1)
+
+logreg.norm.df <- data.frame(log.reg.norm.measure, logreg.norm.test.measure, logreg.norm.train.measure)
+rownames(logreg.norm.df) <- NULL
+
+knitr::kable(logreg.norm.df, longtable = TRUE, booktabs = TRUE, digits = 4, col.names = c("Measures", "Train data", "Test data"), caption = "Table 2 - Logistic Regression Model Performance")
+```
+
+
+<b>Naïve Bayes</b> - Naïve Bayes is a very powerful model when it comes to classification problems because of its highly scalable nature. It predicts the outcome based on conditional probability, so it converges much faster than other classification algorithms such as logistics.
+
+We then implemented the Naïve Bayes model on the training set using the naive Bayes () function. We chose to use 10-fold cross-validation while training. The resulting model was then tested on the test set. We have also used the Grid search Hyperparameter tuning for the model on the parameters such as kernel =TRUE, multiple cost parameter = (0.8,3,1) & fL(factors of Laplace) = c(3,5,1) but the results were the same. Therefore, we found that the “Naïve Bayes” internally optimize and perform tuning, and then it generates the generalized result.
+
+```{r}
+#Naive bayes using numerical variable without normalisation or standardisation
+bank.data.ord.encoded <- data.frame(catagorical.var.onehot, numerical.var, target.class)
+bank.data.ord.smote <- SMOTE(bank.data.ord.encoded[,-which(colnames(bank.data.ord.encoded) == "target.class")], 
+                             bank.data.ord.encoded$target.class)
+
+set.seed(123)
+inTrain <- createDataPartition(bank.data.ord.encoded$target.class, p = .8)[[1]]
+bank.train <- bank.data.ord.encoded[ inTrain, ]
+bank.test  <- bank.data.ord.encoded[-inTrain, ]
+
+X.train <- bank.train[,1:16]
+y.train <- bank.train$target.class
+
+X.test <- bank.test[,1:16]
+y.test <- bank.test$target.class
+
+#Naive Bayes Model
+nb.model <- naiveBayes(X.train, y.train, trControl=trainControl(method='cv',number=10))
+
+nb.predict <- predict(nb.model, X.test)
+test.confmat <- confusionMatrix(as.factor(y.test), nb.predict, positive = '1')
+
+nb.predict.train <- predict(nb.model, X.train)
+train.confmat <- confusionMatrix(as.factor(y.train), nb.predict.train, positive = '1')
+
+#Performance Measures
+nb.measure <- c("Accuracy", "Sensitivity", "Specificity", "Precision", "Recall", "F1 Score")
+
+#Test Measures
+nb.test.accuracy <- test.confmat$overall[1]
+nb.test.sensitivity <- test.confmat$byClass[1]
+nb.test.specificity <- test.confmat$byClass[2]
+nb.test.precision <- test.confmat$byClass[5]
+nb.test.recall <- test.confmat$byClass[6]
+nb.test.f1 <- test.confmat$byClass[7]
+nb.test.measure <- c(nb.test.accuracy, nb.test.sensitivity, nb.test.specificity, nb.test.precision, nb.test.recall, nb.test.f1)
+
+#Train Measures
+nb.train.accuracy <- train.confmat$overall[1]
+nb.train.sensitivity <- train.confmat$byClass[1]
+nb.train.specificity <- train.confmat$byClass[2]
+nb.train.precision <- train.confmat$byClass[5]
+nb.train.recall <- train.confmat$byClass[6]
+nb.train.f1 <- train.confmat$byClass[7]
+nb.train.measure <- c(nb.train.accuracy, nb.train.sensitivity, nb.train.specificity, nb.train.precision, nb.train.recall, nb.train.f1)
+
+#dataframe
+nb.performance.df <- data.frame(nb.measure, nb.train.measure, nb.test.measure)
+rownames(nb.performance.df) <- NULL
+
+knitr::kable(nb.performance.df, longtable = TRUE, booktabs = TRUE, digits = 4, 
+             col.names =c("Measures", "Train data", "Test data"), 
+             caption = 'Table 3 - Naive Bayes Model Performance')
+```
+
+
+<b>Random Forest</b> - The random forest is one of the classification algorithms help classifying the data observations by constructing fine decision trees. First it uses bagging technique to split the train dataset randomly into multiple datasets, construct a random tree (not correlated with each other) on each random sample and then predicts and classify the given sample based on the voting mechanism. Further, it also gives opportunity to different predictors to make a classification/decision. Besides, the feature randomness when building each individual tree try helps to create an uncorrelated forest of trees whose prediction is believed to be more accurate than that of any individual trees. These are key reasons why we want to train the random forest algorithm as well for our supervised binary classification dataset.
+
+* <b>Hyperparameter tuning</b>
+
+  * number of tree - One of the key params, "number of tree', has been determined by running the ranger model for a sequence of trees and measure the Out Of Bag Error that the algorithm generates. In our case the best param for this obtained as 500 which generates less OOB error compared to other number of trees values and then the model is somewhat consistent in OOB error which indicates number of trees is 500 for our dataset.
+
+  * mtry - One of the key params, determines the number of random variables used in each tree, reduces both the correlation and the strength. has also been determined by running the ranger model for a sequence of trees and measure the Out Of Bag Error that the algorithm generates. In our case the best param for this obtained as 15 variables which generates less OOB error compared to other number of trees values and then the model is somewhat not changing further this saturation point in OOB error which indicates mtry is 15 for our dataset.
+
+* <b>Model implementation using the best params</b> - Besides number of trees(500), mtry (15), there are other key params such as splitrule = "gini" and min.node.size = 1 (1 for classification) determined by the 10 fold cross validation method running few 3-5 times. Then the best params are obtained by fitting the model using the test data. Finally, the best params are used to run the algorithm which produces best Accuracy, Sensitivity and Specificity for both TRAIN and TEST dataset. The results are assessed to validate the overfitting and it is clear that there is no overfitting witnessed.
+
+```{r}
+# Assigning smote data into a dataframe
+bank.data.rf <- bank.data.ord.smote$data
+bank.data.rf$class <- as.factor(bank.data.rf$class)
+
+#Partition the data into TRAIN and TEST
+set.seed(786)
+train_indices <- createDataPartition(bank.data.rf$class, p=0.80)[[1]]
+bank.data.train <- bank.data.rf[train_indices,]
+bank.data.test <- bank.data.rf[-train_indices,]
+
+#Fitting the model based on best params
+rf_best_model = ranger(bank.data.train$class ~ .,
+                       data = bank.data.train,
+                       num.trees = 500,
+                       importance = "impurity",
+                       splitrule = "gini",
+                       mtry = 15,
+                       min.node.size = 1,
+                       write.forest = T,
+                       probability = T)
+
+#Train data prediction
+pred_ranger_train_best <- predict(rf_best_model, bank.data.train)
+pred_train_class <- as.factor(ifelse(pred_ranger_train_best$predictions[,2] > 0.5,1,0))
+conf_matrix_train_best <- confusionMatrix(pred_train_class,bank.data.train$class, positive = '1')
+
+#Test data prediction
+pred_ranger_test_best <- predict(rf_best_model, bank.data.test)
+pred_test_class <- as.factor(ifelse(pred_ranger_test_best$predictions[,2] > 0.5,1,0))
+conf_matrix_test_best <- confusionMatrix(pred_test_class,bank.data.test$class, positive = '1')
+
+# Train and Test results in a table format
+# Permance Measures
+rf.perf.measure <- c("Accuracy", "Sensitivity", "Specificity", "Precision", "Recall", "F1 Score")
+
+#Test Measures
+rf.test.accuracy <- conf_matrix_test_best$overall[1]
+rf.test.sensitivity <- conf_matrix_test_best$byClass[1]
+rf.test.specificity <- conf_matrix_test_best$byClass[2]
+rf.test.precision <- conf_matrix_test_best$byClass[5]
+rf.test.recall <- conf_matrix_test_best$byClass[6]
+rf.test.f1 <- conf_matrix_test_best$byClass[7]
+rf.test.measure <- c(rf.test.accuracy, rf.test.sensitivity, rf.test.specificity, rf.test.precision, rf.test.recall, rf.test.f1)
+
+#Train Measures
+rf.train.accuracy <- conf_matrix_train_best$overall[1]
+rf.train.sensitivity <- conf_matrix_train_best$byClass[1]
+rf.train.specificity <- conf_matrix_train_best$byClass[2]
+rf.train.precision <- conf_matrix_train_best$byClass[5]
+rf.train.recall <- conf_matrix_train_best$byClass[6]
+rf.train.f1 <- conf_matrix_train_best$byClass[7]
+rf.train.measure <- c(rf.train.accuracy, rf.train.sensitivity, rf.train.specificity, rf.train.precision, rf.train.recall, rf.train.f1)
+
+#dataframe
+rf.performance.df <- data.frame(rf.perf.measure, rf.train.measure, rf.test.measure)
+rownames(rf.performance.df) <- NULL
+
+knitr::kable(rf.performance.df, longtable = TRUE, booktabs = TRUE, digits = 4,
+             col.names =c("Measures", "Train data", "Test data"),
+             caption = 'Table 4 - Random Forest Model Performance')
+```
+
+
+<b>XGBoost</b> - XGBoost (eXtreme Gradient Boosting) is an optimized implementation of gradient boosting machine learning algorithm mainly designed to be highly efficient and known for its performance.
+
+* <b>Hyperparameter</b> - We have defined tuneGrid parameter in caret package to perform hyper parameter tuning. The tuning parameters used are nrounds: Number of boosting iterations, max_depth: Maximum depth of the tree, eta: Step size shrinkage, gamma: Minimum loss reduction required to make a further partition on the leaf node, colsample_bytree: The subsample ratio of the columns while constructing each tree, min_child_weight: Minimum sum of instance weight needed in a child, subsample: Subsample ratio of the training instances.
+
+* <b>Model implementation using the best params</b> - We used 10-fold cross-validation to split the train dataset into train and validation set to evaluate the different combinations of grid defined. We tried with repeated cross-validation but the machines are not capable enough for such intensive processing. The best parameters obtained are nrounds = 200, max_depth = 5, eta = 0.3, gamma = 0, colsample_bytree = 1, min_child_weight = 1, subsample = 1. We used these best parameters and fit the model using train data. We then used the trained model to predict the test data. The performance of the model using train and test data is as shown below. Looking at the results (Table 5) we could confirm there was no overfitting of the model.
+
+```{r}
+#XGBoost Implementation
+
+#model fitting using best parameters
+train.grid <- expand.grid(
+  nrounds = 200,
+  max_depth = 5,
+  eta = 0.3,
+  gamma = 0,
+  colsample_bytree = 1,
+  min_child_weight = 1,
+  subsample = 1)
+
+train.control <- trainControl(
+  method = "none",
+  verboseIter = FALSE,
+  allowParallel = TRUE
+)
+
+xgb.model <- train(
+  x = data.matrix(train.dataset[,-which(colnames(bank.data.xgboost) == "class")]),
+  y = factor(train.dataset$class),
+  trControl = train.control,
+  tuneGrid = train.grid,
+  method = "xgbTree",
+  verbose = TRUE
+)
+
+#predicting the test data
+xgb.predict <- predict(xgb.model, test.dataset[,-which(colnames(bank.data.xgboost) == "class")])
+expected.class <- factor(test.dataset$class)
+#confusion matrix
+test.confmat <- confusionMatrix(data = xgb.predict, reference = expected.class, positive = '1')
+
+#predicting the train data
+xgb.train.predict <- predict(xgb.model, train.dataset[,-which(colnames(bank.data.xgboost) == "class")])
+expected.train.class <- factor(train.dataset$class)
+#confusion matrix
+train.confmat <- confusionMatrix(data = xgb.train.predict, reference = expected.train.class, positive = '1')
+
+#Permance Measures
+xgboost.perf.measure <- c("Accuracy", "Sensitivity", "Specificity", "Precision", "Recall", "F1 Score")
+
+#Test Measures
+xgboost.test.accuracy <- test.confmat$overall[1]
+xgboost.test.sensitivity <- test.confmat$byClass[1]
+xgboost.test.specificity <- test.confmat$byClass[2]
+xgboost.test.precision <- test.confmat$byClass[5]
+xgboost.test.recall <- test.confmat$byClass[6]
+xgboost.test.f1 <- test.confmat$byClass[7]
+xgboost.test.measure <- c(xgboost.test.accuracy, xgboost.test.sensitivity, xgboost.test.specificity, xgboost.test.precision, xgboost.test.recall, xgboost.test.f1)
+
+#Train Measures
+xgboost.train.accuracy <- train.confmat$overall[1]
+xgboost.train.sensitivity <- train.confmat$byClass[1]
+xgboost.train.specificity <- train.confmat$byClass[2]
+xgboost.train.precision <- train.confmat$byClass[5]
+xgboost.train.recall <- train.confmat$byClass[6]
+xgboost.train.f1 <- train.confmat$byClass[7]
+xgboost.train.measure <- c(xgboost.train.accuracy, xgboost.train.sensitivity, xgboost.train.specificity, xgboost.train.precision, xgboost.train.recall, xgboost.train.f1)
+
+#dataframe
+xgboost.performance.df <- data.frame(xgboost.perf.measure, xgboost.train.measure, xgboost.test.measure)
+rownames(xgboost.performance.df) <- NULL
+
+knitr::kable(xgboost.performance.df, longtable = TRUE, booktabs = TRUE, digits = 4, table.attr = "style='width:70%;'", 
+             col.names =c("Measures", "Train data", "Test data"), 
+             caption = 'Table 5 - XGBoost Model Performance')
+```
+
+#### Classification Performance Evaluation
+
+In principle, there are various methods available to evaluate the algorithm/model performance. We chose the following important methods to evaluate our model implementation and results
+
+* <b>Confusion Matrix Results</b> - This is one of the key methods determining the correct and wrong predictions out of the data for both the response variable values using the model results. Further, it also clearly compares and tells the TP (True Positive) and TN (True Negative) rates of the predicted results. A model performance can be evaluated using these measures such that, a high TP and TN means, the model performance is good. In contrast, the low TP and TN means, the model is not performed as expected. Moreover, our dataset is quite imbalanced in respect to the response variable class “yes/no”. In study, confusion matrix also helps to analyse the model performance in such scenarios.
+
+```{r}
+#Permance Measures
+model.perf.measure <- c("Logistic Regression", "Naive Bayes", "Random Forest", "XGBoost")
+
+#Accuracy
+model.accuracy <- c(logreg.norm.test.accuracy, nb.test.accuracy, rf.test.accuracy, xgboost.test.accuracy)
+
+#Sensitivity
+model.sensitivity <- c(logreg.norm.test.sensitivity, nb.test.sensitivity, rf.test.sensitivity, xgboost.test.sensitivity)
+
+#Specificity
+model.specificity <- c(logreg.norm.test.specificity, nb.test.specificity, rf.test.specificity, xgboost.test.specificity)
+
+#dataframe
+model.performance.df <- data.frame(model.perf.measure, model.accuracy, model.sensitivity, model.specificity)
+rownames(model.performance.df) <- NULL
+
+knitr::kable(model.performance.df, longtable = TRUE, booktabs = TRUE, digits = 4, table.attr = "style='width:70%;'", 
+             col.names =c("Model Name", "Accuracy", "Sensitivity", "Specificity"), 
+             caption = 'Table 6 - Model Performance Comparison')
+```
+
+
+  From the figure (Table 6), all the four models have been trained and tested with its best parameters and the accuracy, sensitivity and specificity measures values have been displayed using the confusion matrix evaluation method.
+
+  Accuracy is an important measure of correctness that is achieved in true prediction. In further analysis, although Random Forest and XGBoost are closely producing similar accuracy, XGBoost slightly outperforms Radom Forest in predicting the class (yes/no) in terms of accuracy. As, it is evident that, XGBoost has higher accuracy than the other two models as well and it helped predicting the true customer subscription (yes/no) using the train/test dataset response variable class. 
+
+  Further, looking at the Sensitivity (the proportion of the positive class that have been correctly classified), the prediction for customers subscribe to the bank’s term deposit product as “yes” (true positive rate) is good at XGBoost compared to all four models, which signifies that the more the sensitivity rate the better the model is and hence, we clearly say XGBoost is our final model for this bank marketing dataset to classify that the customers will subscribe the term deposit product or not.
+
+* <b>ROC Curve</b> - Second, we planned to compare the four models’ performance using the ROC curve. It is a mechanism that simply a plot that represents the trade-off between sensitivity (true positive rate) and specificity at different classification thresholds. ROC curve is more appropriate to be used when the observations present are balanced between each class based on the probability of prediction threshold set as 0.5. 
+
+  From the figure (Figure 4), comparing the ROC curves of all four models, it is evident that the XGBoost roc curve has the bending towards the value 1 and it indicates that area under the curve could also between 0.5 and 1, which emphasizes that the ability to distinguish between positive and negative classes are good. 
+
+  In addition, it has high true positive rate which is higher, and it is reaching more than 0.8 in XGBoost compared to other models random forest, Logistic Regression and Naïve Bias models. Therefore, we can say that XGBoost did a better job of classifying the positive class in the bank dataset.
+
+```{r}
+#XGBoost - Best Model ROC Curve
+roc.cur <- evalmod(scores = as.numeric(xgb.predict), labels = as.numeric(expected.class))
+plot(roc.cur)
+title("Figure 4 - XGBoost - Best Model ROC Curve")
+```
+
+
+##### Caveats and Further improvements
+
+* The XGBoost and Random forest models could have been further tuned with more hyper parameters using repeated cross-validation to achieve better and more reliable results.
+
+* The original dataset is highly imbalanced with 88.7% of samples belongs to class “no” and 11.3% belongs to class “yes”. Hence, we used SMOTE to synthetically upsample class “yes” data observation to balance the data in respect to the class variable. That said, if we could have witnessed more real samples for class “yes”, then the Accuracy/Sensitivity/Specificity results would have been more realistic than we predicted.
+
+##### Conclusion
+
+In summary, from the exploratory data analysis on the predictors and response variable, removal of few irrelevant and the predictors causing outliers, missing value treatment, feature scaling using Normalisations and Standardisation, data imbalance checks and up-sampling them for the better data usage for the algorithms, we chose four supervised classification algorithms. According to the dataset, EDA and pre-processing; these four algorithms with its own complexity level and capabilities helped to train and test the data observations with multiple random K-folds (cross validation techniques) and predict.
+
+Upon training the dataset on these four classification models using the repeated cross validation helped further identifying their best suitable parameters. Further analysis on the model results such as Accuracy, Sensitivity and Specificity individually, the confusion matrix results, ROC curve interpretation yield that the XGBoost performed well compared to the other three models. 
+
+Overall, from the results and the compare and contrast methods, the best candidate that we decided to choose is XGBoost algorithm to classify that the customers of the Portuguese Bank will subscribe to the term deposit product or not by reducing the customer pool and increase efficiency by only targeting the clients who have a high probability of subscribing to a term deposit.
+
+##### References
+[1] https://www.forbes.com/sites/serenitygibbons/2018/08/28/is-everything-you-were-taught-about-cold-calling-wrong-how-to-cold-call/?sh=468736184e7e
+[2] https://www.kaggle.com/henriqueyamahata/bank-marketing 
+
+All members contributed equally on all aspects of this project. 
