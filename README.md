@@ -9,7 +9,7 @@
 *  By solving the classification problem, we are able to reduce the customer pool and hence increase efficiency by only calling the customers who have a high probability of subscribing to a term deposit.
 
 
-# [Churn Analysis for Bank using Machine Learning - Pyhton] (https://github.com/shubhamsrivastava951/Computational-Statistics-in-R-/tree/main/Bank-Customer-Churn-Prediction-master/Bank-Customer-Churn-Prediction-master)
+# [Churn Analysis for Bank using Machine Learning - Pyhton](https://github.com/shubhamsrivastava951/Computational-Statistics-in-R-/tree/main/Bank-Customer-Churn-Prediction-master/Bank-Customer-Churn-Prediction-master)
 
 ### Project Description
 
